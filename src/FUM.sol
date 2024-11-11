@@ -16,7 +16,7 @@ import "./MinOut.sol";
 contract FUM is IFUM, ERC20 {
     IUSM public immutable usm;
 
-    constructor() ERC20("OmniUSM", "OUSM") {
+    constructor() ERC20("OmniFUM", "OFUM") {
         usm = IUSM(msg.sender); // FUM constructor can only be called by a USM instance
     }
 

@@ -61,7 +61,7 @@ contract USM is IUSM, ERC20 {
         bidAskAdjustment: uint64(MILLION) // Initialize adjustment to 1.0 (scaled by 1m)
     });
 
-    constructor(Oracle oracle_) ERC20("Minimalist USD v1 - Release Candidate 1", "USM") {
+    constructor(Oracle oracle_) ERC20("OmniUSM", "OUSM") {
         oracle = oracle_;
         fum = new FUM();
     }
