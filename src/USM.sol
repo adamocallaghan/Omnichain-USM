@@ -15,7 +15,7 @@ import "./MinOut.sol";
  * @author Alberto Cuesta Cañada, Jacob Eliosoff, Alex Roan
  * @notice Concept by Jacob Eliosoff (@jacob-eliosoff).
  */
-contract USM is IUSM, ERC20, OptOutable {
+contract USM is IUSM, ERC20 {
     using Address for address payable;
     using WadMath for uint256;
 
@@ -61,14 +61,7 @@ contract USM is IUSM, ERC20, OptOutable {
         bidAskAdjustment: uint64(MILLION) // Initialize adjustment to 1.0 (scaled by 1m)
     });
 
-    constructor(
-        Oracle oracle_,
-        address[] memory addressesYouCantSendThisContractsTokensTo,
-        address[] memory contractsToAskToRejectSendsToThisContractsAddress
-    )
-        ERC20("Minimalist USD v1 - Release Candidate 1", "USM")
-        OptOutable(addressesYouCantSendThisContractsTokensTo, contractsToAskToRejectSendsToThisContractsAddress)
-    {
+    constructor(Oracle oracle_) ERC20("Minimalist USD v1 - Release Candidate 1", "USM") {
         oracle = oracle_;
         fum = new FUM();
     }
