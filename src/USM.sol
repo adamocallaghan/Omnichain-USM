@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity ^0.8.0;
 
-import "erc20permit/contracts/ERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "./IUSM.sol";
 import "./OptOutable.sol";
 import "./oracles/Oracle.sol";
@@ -15,53 +15,58 @@ import "./MinOut.sol";
  * @author Alberto Cuesta Cañada, Jacob Eliosoff, Alex Roan
  * @notice Concept by Jacob Eliosoff (@jacob-eliosoff).
  */
-contract USM is IUSM, ERC20Permit, OptOutable {
+contract USM is IUSM, ERC20, OptOutable {
     using Address for address payable;
-    using WadMath for uint;
+    using WadMath for uint256;
 
-    uint public constant WAD = 1e18;
-    uint private constant FOUR_WAD = 4 * WAD;                                       // public for these just clutters etherscan
-    uint private constant MILLION = 1e6;
-    uint private constant TRILLION = 1e12;
-    uint private constant HALF_TRILLION = TRILLION / 2;
-    uint public constant MAX_DEBT_RATIO = WAD * 8 / 10;                             // 80%
-    uint public constant MIN_FUM_BUY_PRICE_DECAY_PER_SECOND = 999991977495368426;   // 1-sec decay equiv to halving in 1 day
-    uint public constant BID_ASK_ADJUSTMENT_DECAY_PER_SECOND = 988514020352896135;  // 1-sec decay equiv to halving in 1 minute
-    uint public constant BID_ASK_ADJUSTMENT_ZERO_OUT_PERIOD = 600;                  // After 10 min, adjustment just goes to 0
+    uint256 public constant WAD = 1e18;
+    uint256 private constant FOUR_WAD = 4 * WAD; // public for these just clutters etherscan
+    uint256 private constant MILLION = 1e6;
+    uint256 private constant TRILLION = 1e12;
+    uint256 private constant HALF_TRILLION = TRILLION / 2;
+    uint256 public constant MAX_DEBT_RATIO = WAD * 8 / 10; // 80%
+    uint256 public constant MIN_FUM_BUY_PRICE_DECAY_PER_SECOND = 999991977495368426; // 1-sec decay equiv to halving in 1 day
+    uint256 public constant BID_ASK_ADJUSTMENT_DECAY_PER_SECOND = 988514020352896135; // 1-sec decay equiv to halving in 1 minute
+    uint256 public constant BID_ASK_ADJUSTMENT_ZERO_OUT_PERIOD = 600; // After 10 min, adjustment just goes to 0
 
-    uint public constant PREFUND_END_TIMESTAMP = 1635724800;                        // Midnight (UTC), morning of Nov 1, 2021
-    uint public constant PREFUND_FUM_PRICE_IN_ETH = WAD / 4000;                     // Prefund FUM price: 1/4000 = 0.00025 ETH
+    uint256 public constant PREFUND_END_TIMESTAMP = 1635724800; // Midnight (UTC), morning of Nov 1, 2021
+    uint256 public constant PREFUND_FUM_PRICE_IN_ETH = WAD / 4000; // Prefund FUM price: 1/4000 = 0.00025 ETH
 
     IFUM public immutable override fum;
     Oracle public immutable oracle;
 
     struct StoredState {
-        uint32 timeSystemWentUnderwater;    // Time at which (we noticed) debt ratio went > MAX, or 0 if it's currently < MAX
-        uint64 ethUsdPrice;                 // Stored in millionths, not WADs: so 123.456 is stored as 123,456,000
-        uint64 oracleEthUsdPrice;           // Millionths, not WADs
+        uint32 timeSystemWentUnderwater; // Time at which (we noticed) debt ratio went > MAX, or 0 if it's currently < MAX
+        uint64 ethUsdPrice; // Stored in millionths, not WADs: so 123.456 is stored as 123,456,000
+        uint64 oracleEthUsdPrice; // Millionths, not WADs
         uint32 bidAskAdjustmentTimestamp;
-        uint64 bidAskAdjustment;            // Millionths, not WADs
+        uint64 bidAskAdjustment; // Millionths, not WADs
     }
 
     struct LoadedState {
-        uint timeSystemWentUnderwater;
-        uint ethUsdPrice;                   // This one is in WADs, not millionths
-        uint oracleEthUsdPrice;             // WADs, not millionths
-        uint bidAskAdjustmentTimestamp;
-        uint bidAskAdjustment;              // WADs, not millionths
-        uint ethPool;
-        uint usmTotalSupply;
+        uint256 timeSystemWentUnderwater;
+        uint256 ethUsdPrice; // This one is in WADs, not millionths
+        uint256 oracleEthUsdPrice; // WADs, not millionths
+        uint256 bidAskAdjustmentTimestamp;
+        uint256 bidAskAdjustment; // WADs, not millionths
+        uint256 ethPool;
+        uint256 usmTotalSupply;
     }
 
     StoredState public storedState = StoredState({
-        timeSystemWentUnderwater: 0, ethUsdPrice: 0, oracleEthUsdPrice: 0,
-        bidAskAdjustmentTimestamp: 0, bidAskAdjustment: uint64(MILLION)         // Initialize adjustment to 1.0 (scaled by 1m)
+        timeSystemWentUnderwater: 0,
+        ethUsdPrice: 0,
+        oracleEthUsdPrice: 0,
+        bidAskAdjustmentTimestamp: 0,
+        bidAskAdjustment: uint64(MILLION) // Initialize adjustment to 1.0 (scaled by 1m)
     });
 
-    constructor(Oracle oracle_,
-                address[] memory addressesYouCantSendThisContractsTokensTo,
-                address[] memory contractsToAskToRejectSendsToThisContractsAddress)
-        ERC20Permit("Minimalist USD v1 - Release Candidate 1", "USM")
+    constructor(
+        Oracle oracle_,
+        address[] memory addressesYouCantSendThisContractsTokensTo,
+        address[] memory contractsToAskToRejectSendsToThisContractsAddress
+    )
+        ERC20("Minimalist USD v1 - Release Candidate 1", "USM")
         OptOutable(addressesYouCantSendThisContractsTokensTo, contractsToAskToRejectSendsToThisContractsAddress)
     {
         oracle = oracle_;
@@ -73,7 +78,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
     /**
      * @dev Some operations are only allowed after the initial "prefund" (fixed-price funding) period.
      */
-    modifier onlyAfterPrefund {
+    modifier onlyAfterPrefund() {
         require(!isDuringPrefund(), "Not allowed during prefund");
         _;
     }
@@ -86,10 +91,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param to address to send the USM to.
      * @param minUsmOut Minimum accepted USM for a successful mint.
      */
-    function mint(address to, uint minUsmOut)
-        external payable override
-        returns (uint usmOut)
-    {
+    function mint(address to, uint256 minUsmOut) external payable override returns (uint256 usmOut) {
         usmOut = _mintUsm(to, minUsmOut);
     }
 
@@ -99,9 +101,10 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param usmToBurn Amount of USM to burn.
      * @param minEthOut Minimum accepted ETH for a successful burn.
      */
-    function burn(address payable to, uint usmToBurn, uint minEthOut)
-        external override
-        returns (uint ethOut)
+    function burn(address payable to, uint256 usmToBurn, uint256 minEthOut)
+        external
+        override
+        returns (uint256 ethOut)
     {
         ethOut = _burnUsm(msg.sender, to, usmToBurn, minEthOut);
     }
@@ -112,10 +115,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param to address to send the FUM to.
      * @param minFumOut Minimum accepted FUM for a successful fund.
      */
-    function fund(address to, uint minFumOut)
-        external payable override
-        returns (uint fumOut)
-    {
+    function fund(address to, uint256 minFumOut) external payable override returns (uint256 fumOut) {
         fumOut = _fundFum(to, minFumOut);
     }
 
@@ -125,10 +125,11 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param fumToBurn Amount of FUM to burn.
      * @param minEthOut Minimum accepted ETH for a successful defund.
      */
-    function defund(address payable to, uint fumToBurn, uint minEthOut)
-        external override
+    function defund(address payable to, uint256 fumToBurn, uint256 minEthOut)
+        external
+        override
         onlyAfterPrefund
-        returns (uint ethOut)
+        returns (uint256 ethOut)
     {
         ethOut = _defundFum(msg.sender, to, fumToBurn, minEthOut);
     }
@@ -140,10 +141,11 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param fumToBurn Amount of FUM to burn.
      * @param minEthOut Minimum accepted ETH for a successful defund.
      */
-    function defundFrom(address from, address payable to, uint fumToBurn, uint minEthOut)
-        external override
+    function defundFrom(address from, address payable to, uint256 fumToBurn, uint256 minEthOut)
+        external
+        override
         onlyAfterPrefund
-        returns (uint ethOut)
+        returns (uint256 ethOut)
     {
         require(msg.sender == address(fum), "Only FUM");
         ethOut = _defundFum(from, to, fumToBurn, minEthOut);
@@ -166,7 +168,11 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * are `0000`, then the next 7 will be parsed as the maximum number of USM tokens sent per ETH received, with the 7-digit
      * number interpreted as "hundredths of a USM".  See comments in `MinOut`.
      */
-    function _transfer(address sender, address recipient, uint256 amount) internal override noOptOut(recipient) returns (bool)
+    function _transfer(address sender, address recipient, uint256 amount)
+        internal
+        override
+        noOptOut(recipient)
+        returns (bool)
     {
         if (recipient == address(this) || recipient == address(fum) || recipient == address(0)) {
             _burnUsm(sender, payable(sender), amount, MinOut.parseMinEthOut(amount));
@@ -178,11 +184,10 @@ contract USM is IUSM, ERC20Permit, OptOutable {
 
     // ____________________ Internal helper transactional functions (for functions above) ____________________
 
-    function _mintUsm(address to, uint minUsmOut) internal returns (uint usmOut)
-    {
+    function _mintUsm(address to, uint256 minUsmOut) internal returns (uint256 usmOut) {
         // 1. Load the stored state:
         LoadedState memory ls = loadState();
-        ls.ethPool -= msg.value;    // Backing out the ETH just received, which our calculations should ignore
+        ls.ethPool -= msg.value; // Backing out the ETH just received, which our calculations should ignore
 
         // 2. Check that fund() has been called first - no minting before funding:
         require(ls.ethPool > 0, "Fund before minting");
@@ -191,7 +196,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         (ls.ethUsdPrice, ls.oracleEthUsdPrice, ls.bidAskAdjustment) = checkForFreshOraclePrice(ls);
 
         // 4. Calculate usmOut:
-        uint adjShrinkFactor;
+        uint256 adjShrinkFactor;
         (usmOut, adjShrinkFactor) = usmFromMint(ls, msg.value);
         require(usmOut >= minUsmOut, "Limit not reached");
 
@@ -204,7 +209,9 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         _mint(to, usmOut);
     }
 
-    function _burnUsm(address from, address payable to, uint usmToBurn, uint minEthOut) internal returns (uint ethOut)
+    function _burnUsm(address from, address payable to, uint256 usmToBurn, uint256 minEthOut)
+        internal
+        returns (uint256 ethOut)
     {
         // 1. Load the stored state:
         LoadedState memory ls = loadState();
@@ -213,7 +220,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         (ls.ethUsdPrice, ls.oracleEthUsdPrice, ls.bidAskAdjustment) = checkForFreshOraclePrice(ls);
 
         // 3. Calculate ethOut:
-        uint adjGrowthFactor;
+        uint256 adjGrowthFactor;
         (ethOut, adjGrowthFactor) = ethFromBurn(ls, usmToBurn);
         require(ethOut >= minEthOut, "Limit not reached");
 
@@ -227,23 +234,23 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         to.sendValue(ethOut);
     }
 
-    function _fundFum(address to, uint minFumOut) internal returns (uint fumOut)
-    {
+    function _fundFum(address to, uint256 minFumOut) internal returns (uint256 fumOut) {
         // 1. Load the stored state:
         LoadedState memory ls = loadState();
-        ls.ethPool -= msg.value;    // Backing out the ETH just received, which our calculations should ignore
+        ls.ethPool -= msg.value; // Backing out the ETH just received, which our calculations should ignore
 
         // 2. Refresh the oracle price:
         (ls.ethUsdPrice, ls.oracleEthUsdPrice, ls.bidAskAdjustment) = checkForFreshOraclePrice(ls);
 
         // 3. Refresh timeSystemWentUnderwater, and replace ls.usmTotalSupply with the *effective* USM supply for FUM buys:
-        uint debtRatio_;
-        (ls.timeSystemWentUnderwater, ls.usmTotalSupply, debtRatio_) =
-            checkIfUnderwater(ls.usmTotalSupply, ls.ethPool, ls.ethUsdPrice, ls.timeSystemWentUnderwater, block.timestamp);
+        uint256 debtRatio_;
+        (ls.timeSystemWentUnderwater, ls.usmTotalSupply, debtRatio_) = checkIfUnderwater(
+            ls.usmTotalSupply, ls.ethPool, ls.ethUsdPrice, ls.timeSystemWentUnderwater, block.timestamp
+        );
 
         // 4. Calculate fumOut:
-        uint fumSupply = fum.totalSupply();
-        uint adjGrowthFactor;
+        uint256 fumSupply = fum.totalSupply();
+        uint256 adjGrowthFactor;
         (fumOut, adjGrowthFactor) = fumFromFund(ls, fumSupply, msg.value, debtRatio_, isDuringPrefund());
         require(fumOut >= minFumOut, "Limit not reached");
 
@@ -256,7 +263,9 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         fum.mint(to, fumOut);
     }
 
-    function _defundFum(address from, address payable to, uint fumToBurn, uint minEthOut) internal returns (uint ethOut)
+    function _defundFum(address from, address payable to, uint256 fumToBurn, uint256 minEthOut)
+        internal
+        returns (uint256 ethOut)
     {
         // 1. Load the stored state:
         LoadedState memory ls = loadState();
@@ -265,8 +274,8 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         (ls.ethUsdPrice, ls.oracleEthUsdPrice, ls.bidAskAdjustment) = checkForFreshOraclePrice(ls);
 
         // 3. Calculate ethOut:
-        uint fumSupply = fum.totalSupply();
-        uint adjShrinkFactor;
+        uint256 fumSupply = fum.totalSupply();
+        uint256 adjShrinkFactor;
         (ethOut, adjShrinkFactor) = ethFromDefund(ls, fumSupply, fumToBurn);
         require(ethOut >= minEthOut, "Limit not reached");
 
@@ -275,7 +284,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         ls.ethUsdPrice = ls.ethUsdPrice.wadMulDown(adjShrinkFactor);
 
         // 5. Check that the defund didn't leave debt ratio > MAX_DEBT_RATIO:
-        uint newDebtRatio = debtRatio(ls.ethUsdPrice, ls.ethPool - ethOut, ls.usmTotalSupply);
+        uint256 newDebtRatio = debtRatio(ls.ethUsdPrice, ls.ethPool - ethOut, ls.usmTotalSupply);
         require(newDebtRatio <= MAX_DEBT_RATIO, "Debt ratio > max");
 
         // 6. Burn the input FUM, store the updated state, and return the user's ETH:
@@ -297,35 +306,52 @@ contract USM is IUSM, ERC20Permit, OptOutable {
             emit UnderwaterStatusChanged(isUnderwater);
         }
 
-        uint priceToStore = ls.ethUsdPrice + HALF_TRILLION;
-        unchecked { priceToStore /= TRILLION; }
-        uint oraclePriceToStore;
-        unchecked { oraclePriceToStore = ls.oracleEthUsdPrice / TRILLION; } // Already rounded: see checkForFreshOraclePrice()
+        uint256 priceToStore = ls.ethUsdPrice + HALF_TRILLION;
+        unchecked {
+            priceToStore /= TRILLION;
+        }
+        uint256 oraclePriceToStore;
+        unchecked {
+            oraclePriceToStore = ls.oracleEthUsdPrice / TRILLION;
+        } // Already rounded: see checkForFreshOraclePrice()
         if (priceToStore != storedState.ethUsdPrice) {
             require(priceToStore <= type(uint64).max, "ethUsdPrice overflow");
-            unchecked { emit PriceChanged(priceToStore * TRILLION, oraclePriceToStore * TRILLION); }
+            unchecked {
+                emit PriceChanged(priceToStore * TRILLION, oraclePriceToStore * TRILLION);
+            }
         }
         require(oraclePriceToStore <= type(uint64).max, "oracleEthUsdPrice overflow");
 
         require(ls.bidAskAdjustmentTimestamp <= type(uint32).max, "bidAskAdjustmentTimestamp overflow");
-        uint adjustmentToStore = ls.bidAskAdjustment + HALF_TRILLION;
-        unchecked { adjustmentToStore /= TRILLION; }
+        uint256 adjustmentToStore = ls.bidAskAdjustment + HALF_TRILLION;
+        unchecked {
+            adjustmentToStore /= TRILLION;
+        }
         if (adjustmentToStore != storedState.bidAskAdjustment) {
             require(adjustmentToStore <= type(uint64).max, "bidAskAdjustment overflow");
-            unchecked { emit BidAskAdjustmentChanged(adjustmentToStore * TRILLION); }
+            unchecked {
+                emit BidAskAdjustmentChanged(adjustmentToStore * TRILLION);
+            }
         }
 
-        (storedState.timeSystemWentUnderwater,
-         storedState.ethUsdPrice, storedState.oracleEthUsdPrice,
-         storedState.bidAskAdjustmentTimestamp, storedState.bidAskAdjustment) =
-            (uint32(ls.timeSystemWentUnderwater),
-             uint64(priceToStore), uint64(oraclePriceToStore),
-             uint32(ls.bidAskAdjustmentTimestamp), uint64(adjustmentToStore));
+        (
+            storedState.timeSystemWentUnderwater,
+            storedState.ethUsdPrice,
+            storedState.oracleEthUsdPrice,
+            storedState.bidAskAdjustmentTimestamp,
+            storedState.bidAskAdjustment
+        ) = (
+            uint32(ls.timeSystemWentUnderwater),
+            uint64(priceToStore),
+            uint64(oraclePriceToStore),
+            uint32(ls.bidAskAdjustmentTimestamp),
+            uint64(adjustmentToStore)
+        );
     }
 
     // ____________________ Public Oracle view functions ____________________
 
-    function latestPrice() public virtual override view returns (uint price) {
+    function latestPrice() public view virtual override returns (uint256 price) {
         (price,,) = checkForFreshOraclePrice(loadState());
     }
 
@@ -337,18 +363,24 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * system price, `ls.ethUsdPrice`, which may have been nudged around by mint/burn operations since the last oracle update.
      */
     function checkForFreshOraclePrice(LoadedState memory ls)
-        public view returns (uint price, uint oraclePrice, uint adjustment)
+        public
+        view
+        returns (uint256 price, uint256 oraclePrice, uint256 adjustment)
     {
         oraclePrice = oracle.latestPrice() + HALF_TRILLION; // Round for comparison below (we only store millionths precision)
-        unchecked { oraclePrice = oraclePrice / TRILLION * TRILLION; }  // Zeroing out the last 12 digits
+        unchecked {
+            oraclePrice = oraclePrice / TRILLION * TRILLION;
+        } // Zeroing out the last 12 digits
 
         adjustment = ls.bidAskAdjustment;
 
-        if (oraclePrice == ls.oracleEthUsdPrice) {          // Oracle price unchanged from last time, so keep our stored price
+        if (oraclePrice == ls.oracleEthUsdPrice) {
+            // Oracle price unchanged from last time, so keep our stored price
             price = ls.ethUsdPrice;
         } else {
             price = oraclePrice;
-            if (ls.ethUsdPrice != 0) {                      // If old price is 0, don't try to use it to adjust bidAskAdj...
+            if (ls.ethUsdPrice != 0) {
+                // If old price is 0, don't try to use it to adjust bidAskAdj...
                 /**
                  * This is a bit subtle.  We want to update the mid stored price to the oracle's fresh value, while updating
                  * bidAskAdjustment in such a way that the currently adjusted (more expensive than mid) side gets no
@@ -388,11 +420,11 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @notice Total amount of ETH in the pool (ie, in the contract).
      * @return pool ETH pool
      */
-    function ethPool() public override view returns (uint pool) {
+    function ethPool() public view override returns (uint256 pool) {
         pool = address(this).balance;
     }
 
-    function fumTotalSupply() public override view returns (uint supply) {
+    function fumTotalSupply() public view override returns (uint256 supply) {
         supply = fum.totalSupply();
     }
 
@@ -403,15 +435,15 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * if recent activity was short-ETH (`defund()` and `mint()`), reduce FUM sell price/raise USM buy price.
      * @return adjustment The sliding-price bid/ask adjustment
      */
-    function bidAskAdjustment() public override view returns (uint adjustment) {
-        adjustment = loadState().bidAskAdjustment;      // Not just from storedState, b/c need to update it - see loadState()
+    function bidAskAdjustment() public view override returns (uint256 adjustment) {
+        adjustment = loadState().bidAskAdjustment; // Not just from storedState, b/c need to update it - see loadState()
     }
 
-    function timeSystemWentUnderwater() public override view returns (uint timestamp) {
+    function timeSystemWentUnderwater() public view override returns (uint256 timestamp) {
         timestamp = storedState.timeSystemWentUnderwater;
     }
 
-    function isDuringPrefund() public override view returns (bool duringPrefund) {
+    function isDuringPrefund() public view override returns (bool duringPrefund) {
         duringPrefund = block.timestamp < PREFUND_END_TIMESTAMP;
     }
 
@@ -426,14 +458,20 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      */
     function loadState() public view returns (LoadedState memory ls) {
         ls.timeSystemWentUnderwater = storedState.timeSystemWentUnderwater;
-        unchecked { ls.ethUsdPrice = storedState.ethUsdPrice * TRILLION; }  // Convert MILLION (1e6) format to WAD (1e18)
-        unchecked { ls.oracleEthUsdPrice = storedState.oracleEthUsdPrice * TRILLION; }
+        unchecked {
+            ls.ethUsdPrice = storedState.ethUsdPrice * TRILLION;
+        } // Convert MILLION (1e6) format to WAD (1e18)
+        unchecked {
+            ls.oracleEthUsdPrice = storedState.oracleEthUsdPrice * TRILLION;
+        }
 
         // Bring bidAskAdjustment up to the present - it gravitates towards 1 over time, so the stored value is obsolete:
         ls.bidAskAdjustmentTimestamp = block.timestamp;
-        unchecked { ls.bidAskAdjustment = bidAskAdjustment(storedState.bidAskAdjustmentTimestamp,
-                                                           storedState.bidAskAdjustment * TRILLION,
-                                                           block.timestamp); }
+        unchecked {
+            ls.bidAskAdjustment = bidAskAdjustment(
+                storedState.bidAskAdjustmentTimestamp, storedState.bidAskAdjustment * TRILLION, block.timestamp
+            );
+        }
 
         ls.ethPool = ethPool();
         ls.usmTotalSupply = totalSupply();
@@ -445,14 +483,22 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @notice Calculate the amount of ETH in the buffer.
      * @return buffer ETH buffer
      */
-    function ethBuffer(uint ethUsdPrice, uint ethInPool, uint usmSupply, bool roundUp)
-        public override pure returns (int buffer)
+    function ethBuffer(uint256 ethUsdPrice, uint256 ethInPool, uint256 usmSupply, bool roundUp)
+        public
+        pure
+        override
+        returns (int256 buffer)
     {
         // Reverse the input upOrDown, since we're using it for usmToEth(), which will be *subtracted* from ethInPool below:
-        uint usmValueInEth = usmToEth(ethUsdPrice, usmSupply, !roundUp);    // Iff rounding the buffer up, round usmValue down
-        require(ethUsdPrice <= uint(type(int).max) && usmValueInEth <= uint(type(int).max), "ethBuffer overflow/underflow");
+        uint256 usmValueInEth = usmToEth(ethUsdPrice, usmSupply, !roundUp); // Iff rounding the buffer up, round usmValue down
+        require(
+            ethUsdPrice <= uint256(type(int256).max) && usmValueInEth <= uint256(type(int256).max),
+            "ethBuffer overflow/underflow"
+        );
         // After the previous line, no over/underflow should be possible here:
-        unchecked { buffer = int(ethInPool) - int(usmValueInEth); }
+        unchecked {
+            buffer = int256(ethInPool) - int256(usmValueInEth);
+        }
     }
 
     /**
@@ -460,9 +506,15 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * to the current ETH pool value in USD (ETH qty * ETH/USD price).
      * @return ratio Debt ratio (or 0 if there's currently 0 ETH in the pool/price = 0: these should never happen after launch)
      */
-    function debtRatio(uint ethUsdPrice, uint ethInPool, uint usmSupply) public override pure returns (uint ratio) {
-        uint ethPoolValueInUsd = ethInPool.wadMulDown(ethUsdPrice);
-        ratio = (usmSupply == 0 ? 0 : (ethPoolValueInUsd == 0 ? type(uint).max : usmSupply.wadDivUp(ethPoolValueInUsd)));
+    function debtRatio(uint256 ethUsdPrice, uint256 ethInPool, uint256 usmSupply)
+        public
+        pure
+        override
+        returns (uint256 ratio)
+    {
+        uint256 ethPoolValueInUsd = ethInPool.wadMulDown(ethUsdPrice);
+        ratio =
+            (usmSupply == 0 ? 0 : (ethPoolValueInUsd == 0 ? type(uint256).max : usmSupply.wadDivUp(ethPoolValueInUsd)));
     }
 
     /**
@@ -470,7 +522,12 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param ethAmount The amount of ETH to convert
      * @return usmOut The amount of USM
      */
-    function ethToUsm(uint ethUsdPrice, uint ethAmount, bool roundUp) public override pure returns (uint usmOut) {
+    function ethToUsm(uint256 ethUsdPrice, uint256 ethAmount, bool roundUp)
+        public
+        pure
+        override
+        returns (uint256 usmOut)
+    {
         usmOut = ethAmount.wadMul(ethUsdPrice, roundUp);
     }
 
@@ -479,19 +536,29 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param usmAmount The amount of USM to convert
      * @return ethOut The amount of ETH
      */
-    function usmToEth(uint ethUsdPrice, uint usmAmount, bool roundUp) public override pure returns (uint ethOut) {
+    function usmToEth(uint256 ethUsdPrice, uint256 usmAmount, bool roundUp)
+        public
+        pure
+        override
+        returns (uint256 ethOut)
+    {
         ethOut = usmAmount.wadDiv(ethUsdPrice, roundUp);
     }
 
     /**
      * @return price The ETH/USD price, adjusted by the `bidAskAdjustment` (if applicable) for the given buy/sell side.
      */
-    function adjustedEthUsdPrice(IUSM.Side side, uint ethUsdPrice, uint adjustment) public override pure returns (uint price) {
+    function adjustedEthUsdPrice(IUSM.Side side, uint256 ethUsdPrice, uint256 adjustment)
+        public
+        pure
+        override
+        returns (uint256 price)
+    {
         price = ethUsdPrice;
 
         // Apply the adjustment if (side == Buy and adj > 1), or (side == Sell and adj < 1):
         if (side == IUSM.Side.Buy ? (adjustment > WAD) : (adjustment < WAD)) {
-            price = price.wadMul(adjustment, side == IUSM.Side.Buy);    // Round up iff side = buy
+            price = price.wadMul(adjustment, side == IUSM.Side.Buy); // Round up iff side = buy
         }
     }
 
@@ -499,8 +566,8 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @notice Calculate the *marginal* price of USM (in ETH terms): that is, of the next unit, before the price start sliding.
      * @return price USM price in ETH terms
      */
-    function usmPrice(IUSM.Side side, uint ethUsdPrice) public override pure returns (uint price) {
-        price = usmToEth(ethUsdPrice, WAD, side == IUSM.Side.Buy);      // Round up iff side = buy
+    function usmPrice(IUSM.Side side, uint256 ethUsdPrice) public pure override returns (uint256 price) {
+        price = usmToEth(ethUsdPrice, WAD, side == IUSM.Side.Buy); // Round up iff side = buy
     }
 
     /**
@@ -509,17 +576,22 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * return value of `usmSupplyForFumBuys()`.
      * @return price FUM price in ETH terms
      */
-    function fumPrice(IUSM.Side side, uint ethUsdPrice, uint ethInPool, uint usmEffectiveSupply, uint fumSupply, bool prefund)
-        public override pure returns (uint price)
-    {
+    function fumPrice(
+        IUSM.Side side,
+        uint256 ethUsdPrice,
+        uint256 ethInPool,
+        uint256 usmEffectiveSupply,
+        uint256 fumSupply,
+        bool prefund
+    ) public pure override returns (uint256 price) {
         if (prefund) {
-            price = PREFUND_FUM_PRICE_IN_ETH;   // We're in the prefund period, so the price is just the prefund's "prix fixe"
+            price = PREFUND_FUM_PRICE_IN_ETH; // We're in the prefund period, so the price is just the prefund's "prix fixe"
         } else {
             // Using usmEffectiveSupply here, rather than just the raw actual supply, has the effect of bumping the FUM price
             // up to the minFumBuyPrice when needed (ie, when debt ratio > MAX_DEBT_RATIO):
             bool roundUp = (side == IUSM.Side.Buy);
-            int buffer = ethBuffer(ethUsdPrice, ethInPool, usmEffectiveSupply, roundUp);
-            price = (buffer <= 0 ? 0 : uint(buffer).wadDiv(fumSupply, roundUp));
+            int256 buffer = ethBuffer(ethUsdPrice, ethInPool, usmEffectiveSupply, roundUp);
+            price = (buffer <= 0 ? 0 : uint256(buffer).wadDiv(fumSupply, roundUp));
         }
     }
 
@@ -544,20 +616,32 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      *    (25,000) is at a rate that brings it "halfway closer per `minFumBuyPrice` half-life (eg, 1 day)": so three days after
      *    going underwater, the supply returned will be 25,000 - 0.5**3 * (25,000 - 20,000) = 24,375.
      */
-    function checkIfUnderwater(uint usmActualSupply, uint ethPool_, uint ethUsdPrice, uint oldTimeUnderwater, uint currentTime)
-        public override pure returns (uint timeSystemWentUnderwater_, uint usmSupplyForFumBuys, uint debtRatio_)
+    function checkIfUnderwater(
+        uint256 usmActualSupply,
+        uint256 ethPool_,
+        uint256 ethUsdPrice,
+        uint256 oldTimeUnderwater,
+        uint256 currentTime
+    )
+        public
+        pure
+        override
+        returns (uint256 timeSystemWentUnderwater_, uint256 usmSupplyForFumBuys, uint256 debtRatio_)
     {
         debtRatio_ = debtRatio(ethUsdPrice, ethPool_, usmActualSupply);
-        if (debtRatio_ <= MAX_DEBT_RATIO) {            // We're not underwater, so leave timeSystemWentUnderwater_ as 0
-            usmSupplyForFumBuys = usmActualSupply;     // When not underwater, USM supply for FUM buys is just actual supply
-        } else {                                       // We're underwater
+        if (debtRatio_ <= MAX_DEBT_RATIO) {
+            // We're not underwater, so leave timeSystemWentUnderwater_ as 0
+            usmSupplyForFumBuys = usmActualSupply; // When not underwater, USM supply for FUM buys is just actual supply
+        } else {
+            // We're underwater
             // Set timeSystemWentUnderwater_ to currentTime, if it wasn't already set:
             timeSystemWentUnderwater_ = (oldTimeUnderwater != 0 ? oldTimeUnderwater : currentTime);
 
             // Calculate usmSupplyForFumBuys:
-            uint maxEffectiveDebtRatio = debtRatio_.wadMin(WAD);    // min(actual debt ratio, 100%)
-            uint decayFactor = MIN_FUM_BUY_PRICE_DECAY_PER_SECOND.wadPowInt(currentTime - timeSystemWentUnderwater_);
-            uint effectiveDebtRatio = maxEffectiveDebtRatio - decayFactor.wadMulUp(maxEffectiveDebtRatio - MAX_DEBT_RATIO);
+            uint256 maxEffectiveDebtRatio = debtRatio_.wadMin(WAD); // min(actual debt ratio, 100%)
+            uint256 decayFactor = MIN_FUM_BUY_PRICE_DECAY_PER_SECOND.wadPowInt(currentTime - timeSystemWentUnderwater_);
+            uint256 effectiveDebtRatio =
+                maxEffectiveDebtRatio - decayFactor.wadMulUp(maxEffectiveDebtRatio - MAX_DEBT_RATIO);
             usmSupplyForFumBuys = effectiveDebtRatio.wadMulDown(ethPool_.wadMulDown(ethUsdPrice));
         }
     }
@@ -565,11 +649,18 @@ contract USM is IUSM, ERC20Permit, OptOutable {
     /**
      * @notice Returns the given stored `bidAskAdjustment` value, updated (decayed towards 1) to the current time.
      */
-    function bidAskAdjustment(uint storedTime, uint storedAdjustment, uint currentTime) public pure returns (uint adjustment) {
-        uint secsSinceStored = currentTime - storedTime;
+    function bidAskAdjustment(uint256 storedTime, uint256 storedAdjustment, uint256 currentTime)
+        public
+        pure
+        returns (uint256 adjustment)
+    {
+        uint256 secsSinceStored = currentTime - storedTime;
         // ZERO_OUT_PERIOD here is important, so a long gap between ops doesn't waste a lot of gas calculating the ~0 decay:
-        uint decayFactor = (secsSinceStored >= BID_ASK_ADJUSTMENT_ZERO_OUT_PERIOD ? 0 :
-                            BID_ASK_ADJUSTMENT_DECAY_PER_SECOND.wadPowInt(secsSinceStored));
+        uint256 decayFactor = (
+            secsSinceStored >= BID_ASK_ADJUSTMENT_ZERO_OUT_PERIOD
+                ? 0
+                : BID_ASK_ADJUSTMENT_DECAY_PER_SECOND.wadPowInt(secsSinceStored)
+        );
         // Here we use the idea that for any b and 0 <= p <= 1, we can crudely approximate b**p by 1 + (b-1)p = 1 + bp - p.
         // Eg: 0.6**0.5 pulls 0.6 "about halfway" to 1 (0.8); 0.6**0.25 pulls 0.6 "about 3/4 of the way" to 1 (0.9).
         // So b**p =~ b + (1-p)(1-b) = b + 1 - b - p + bp = 1 + bp - p.
@@ -582,8 +673,10 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param ethIn The amount of ETH passed to `mint()`
      * @return usmOut The amount of USM to receive in exchange
      */
-    function usmFromMint(LoadedState memory ls, uint ethIn)
-        public pure returns (uint usmOut, uint adjShrinkFactor)
+    function usmFromMint(LoadedState memory ls, uint256 ethIn)
+        public
+        pure
+        returns (uint256 usmOut, uint256 adjShrinkFactor)
     {
         // The USM buy price we pay, in ETH terms, "slides up" as we buy, proportional to the ETH in the pool: if the pool
         // starts with 100 ETH, and ethIn = 5, so we're increasing it to 105, then our USM/ETH buy price increases smoothly by
@@ -591,11 +684,11 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         // equivalent to saying that the ETH/USD price used to price our USM *decreases* smoothly by 5% during the operation.)
         // Of that 5%, "half" (in log space) is the ETH/USD *mid* price dropping, and the other half is the bidAskAdjustment
         // (ETH sell price discount) dropping.
-        uint adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Sell, ls.ethUsdPrice, ls.bidAskAdjustment);
-        uint usmBuyPrice0 = usmPrice(IUSM.Side.Buy, adjustedEthUsdPrice0);      // Minting USM = buying USM = selling ETH
-        uint ethPool1 = ls.ethPool + ethIn;
+        uint256 adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Sell, ls.ethUsdPrice, ls.bidAskAdjustment);
+        uint256 usmBuyPrice0 = usmPrice(IUSM.Side.Buy, adjustedEthUsdPrice0); // Minting USM = buying USM = selling ETH
+        uint256 ethPool1 = ls.ethPool + ethIn;
 
-        uint oneOverEthGrowthFactor = ls.ethPool.wadDivDown(ethPool1);
+        uint256 oneOverEthGrowthFactor = ls.ethPool.wadDivDown(ethPool1);
         adjShrinkFactor = oneOverEthGrowthFactor.wadSqrtDown();
 
         // In theory, calculating the total amount of USM minted involves summing an integral over 1 / usmBuyPrice, which gives
@@ -606,7 +699,7 @@ contract USM is IUSM, ERC20Permit, OptOutable {
 
         // But in practice, we can save some gas by approximating the log integral above as follows: take the geometric average
         // of the starting and ending usmBuyPrices, and just apply that average price to the entire ethIn passed in.
-        uint usmBuyPriceAvg = usmBuyPrice0.wadDivUp(adjShrinkFactor);
+        uint256 usmBuyPriceAvg = usmBuyPrice0.wadDivUp(adjShrinkFactor);
         usmOut = ethIn.wadDivDown(usmBuyPriceAvg);
     }
 
@@ -616,22 +709,24 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param usmIn The amount of USM passed to `burn()`
      * @return ethOut The amount of ETH to receive in exchange
      */
-    function ethFromBurn(LoadedState memory ls, uint usmIn)
-        public pure returns (uint ethOut, uint adjGrowthFactor)
+    function ethFromBurn(LoadedState memory ls, uint256 usmIn)
+        public
+        pure
+        returns (uint256 ethOut, uint256 adjGrowthFactor)
     {
         // Burn USM at a sliding-down USM price (ie, a sliding-up ETH price).  This is just the mirror image of the math in
         // usmFromMint() above, but because we're calculating output ETH from input USM rather than the other way around, we
         // end up with an exponent (exponent.wadExpDown() below, aka e**exponent) rather than a logarithm.
-        uint adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Buy, ls.ethUsdPrice, ls.bidAskAdjustment);
-        uint usmSellPrice0 = usmPrice(IUSM.Side.Sell, adjustedEthUsdPrice0);    // Burning USM = selling USM = buying ETH
+        uint256 adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Buy, ls.ethUsdPrice, ls.bidAskAdjustment);
+        uint256 usmSellPrice0 = usmPrice(IUSM.Side.Sell, adjustedEthUsdPrice0); // Burning USM = selling USM = buying ETH
 
         // The USM sell price is capped by the ETH pool value per USM outstanding.  In other words, when the system is
         // underwater (debt ratio > 100%), burners "take a haircut" - burning USM yields less than $1 of ETH per USM burned:
         usmSellPrice0 = usmSellPrice0.wadMin(ls.ethPool.wadDivDown(ls.usmTotalSupply));
 
         // The exact integral - calculating the amount of ETH yielded by burning the USM at our sliding-down USM price:
-        uint exponent = usmIn.wadMulDivDown(usmSellPrice0, ls.ethPool);
-        uint ethPool1 = ls.ethPool.wadDivUp(exponent.wadExpDown());
+        uint256 exponent = usmIn.wadMulDivDown(usmSellPrice0, ls.ethPool);
+        uint256 ethPool1 = ls.ethPool.wadDivUp(exponent.wadExpDown());
         ethOut = ls.ethPool - ethPool1;
 
         // In this case we back out the adjGrowthFactor (change in mid price and bidAskAdj) from the change in the ETH pool:
@@ -647,11 +742,14 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param ethIn The amount of ETH passed to `fund()`
      * @return fumOut The amount of FUM to receive in exchange
      */
-    function fumFromFund(LoadedState memory ls, uint fumSupply, uint ethIn, uint debtRatio_, bool prefund)
-        public pure returns (uint fumOut, uint adjGrowthFactor)
+    function fumFromFund(LoadedState memory ls, uint256 fumSupply, uint256 ethIn, uint256 debtRatio_, bool prefund)
+        public
+        pure
+        returns (uint256 fumOut, uint256 adjGrowthFactor)
     {
-        uint adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Buy, ls.ethUsdPrice, ls.bidAskAdjustment);
-        uint fumBuyPrice0 = fumPrice(IUSM.Side.Buy, adjustedEthUsdPrice0, ls.ethPool, ls.usmTotalSupply, fumSupply, prefund);
+        uint256 adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Buy, ls.ethUsdPrice, ls.bidAskAdjustment);
+        uint256 fumBuyPrice0 =
+            fumPrice(IUSM.Side.Buy, adjustedEthUsdPrice0, ls.ethPool, ls.usmTotalSupply, fumSupply, prefund);
         if (prefund) {
             // We're in the prefund period, so no fees - fumOut is just ethIn divided by the fixed prefund FUM price:
             adjGrowthFactor = WAD;
@@ -669,21 +767,26 @@ contract USM is IUSM, ERC20Permit, OptOutable {
             // The code below uses a "reasonable approximation" to deal with those complications.  See also the discussion in:
             // https://jacob-eliosoff.medium.com/usm-minimalist-decentralized-stablecoin-part-4-fee-math-decisions-a5be6ecfdd6f
 
-            { // Scope for adjGrowthFactor, to avoid the dreaded "stack too deep" error.  Thanks Uniswap v2 for the trick!
+            {
+                // Scope for adjGrowthFactor, to avoid the dreaded "stack too deep" error.  Thanks Uniswap v2 for the trick!
                 // 1. Start by calculating the "net FUM delta" described above - the factor by which this operation will move
                 // the ETH price more than a simple mint() operation would.  Calculating the pure, fluctuating theoretical
                 // delta is a mess: we calculate the initial delta and pretend it stays fixed thereafter.  The theoretical
                 // delta *decreases* during a fund() call (as the pool grows, the ETH/USD price increases, and FUM becomes less
                 // leveraged), so holding it fixed at its initial value is "pessimistic", like we want - ensures we charge more
                 // fees than the theoretical amount, not less.
-                uint effectiveDebtRatio0 = debtRatio_.wadMin(MAX_DEBT_RATIO);
-                uint netFumDelta;
-                unchecked { netFumDelta = effectiveDebtRatio0.wadDivUp(WAD - effectiveDebtRatio0); }
+                uint256 effectiveDebtRatio0 = debtRatio_.wadMin(MAX_DEBT_RATIO);
+                uint256 netFumDelta;
+                unchecked {
+                    netFumDelta = effectiveDebtRatio0.wadDivUp(WAD - effectiveDebtRatio0);
+                }
 
                 // 2. Given the delta, we can calculate the adjGrowthFactor (price impact): for mint() (delta 1), the factor
                 // was poolChangeFactor**(1 / 2); now instead we use poolChangeFactor**(netFumDelta / 2).
-                uint ethPool1 = ls.ethPool + ethIn;
-                unchecked { adjGrowthFactor = ethPool1.wadDivUp(ls.ethPool).wadPowUp(netFumDelta / 2); }
+                uint256 ethPool1 = ls.ethPool + ethIn;
+                unchecked {
+                    adjGrowthFactor = ethPool1.wadDivUp(ls.ethPool).wadPowUp(netFumDelta / 2);
+                }
             }
 
             // 3. Here we use the same simplifying trick as usmFromMint() above: we pretend our entire FUM purchase is done at
@@ -694,10 +797,10 @@ contract USM is IUSM, ERC20Permit, OptOutable {
             // the FUM buy price follows a less predictable curve than the USM buy price, but it's close enough for our
             // purposes: we mostly just want to charge funders a positive fee, that increases as a % of ethIn as ethIn gets
             // larger ("larger trades pay superlinearly larger fees").
-            uint adjustedEthUsdPrice1 = adjustedEthUsdPrice0.wadMulUp(adjGrowthFactor.wadSquaredUp());
-            uint fumBuyPrice1 = fumPrice(IUSM.Side.Buy, adjustedEthUsdPrice1, ls.ethPool, ls.usmTotalSupply, fumSupply,
-                                         prefund);
-            uint avgFumBuyPrice = fumBuyPrice0.wadMulUp(fumBuyPrice1).wadSqrtUp();      // Taking the geometric avg
+            uint256 adjustedEthUsdPrice1 = adjustedEthUsdPrice0.wadMulUp(adjGrowthFactor.wadSquaredUp());
+            uint256 fumBuyPrice1 =
+                fumPrice(IUSM.Side.Buy, adjustedEthUsdPrice1, ls.ethPool, ls.usmTotalSupply, fumSupply, prefund);
+            uint256 avgFumBuyPrice = fumBuyPrice0.wadMulUp(fumBuyPrice1).wadSqrtUp(); // Taking the geometric avg
             fumOut = ethIn.wadDivDown(avgFumBuyPrice);
         }
     }
@@ -707,47 +810,57 @@ contract USM is IUSM, ERC20Permit, OptOutable {
      * @param fumIn The amount of FUM passed to `defund()`
      * @return ethOut The amount of ETH to receive in exchange
      */
-    function ethFromDefund(LoadedState memory ls, uint fumSupply, uint fumIn)
-        public pure returns (uint ethOut, uint adjShrinkFactor)
+    function ethFromDefund(LoadedState memory ls, uint256 fumSupply, uint256 fumIn)
+        public
+        pure
+        returns (uint256 ethOut, uint256 adjShrinkFactor)
     {
         // Burn FUM at a sliding-down FUM price.  Our approximation technique here resembles the one in fumFromFund() above,
         // but we need to be even more clever this time...
 
         // 1. Calculating the initial FUM sell price we start from is no problem:
-        uint adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Sell, ls.ethUsdPrice, ls.bidAskAdjustment);
-        uint fumSellPrice0 = fumPrice(IUSM.Side.Sell, adjustedEthUsdPrice0, ls.ethPool, ls.usmTotalSupply, fumSupply, false);
+        uint256 adjustedEthUsdPrice0 = adjustedEthUsdPrice(IUSM.Side.Sell, ls.ethUsdPrice, ls.bidAskAdjustment);
+        uint256 fumSellPrice0 =
+            fumPrice(IUSM.Side.Sell, adjustedEthUsdPrice0, ls.ethPool, ls.usmTotalSupply, fumSupply, false);
 
-        { // Scope for adjShrinkFactor, to avoid the dreaded "stack too deep" error.  Thanks Uniswap v2 for the trick!
+        {
+            // Scope for adjShrinkFactor, to avoid the dreaded "stack too deep" error.  Thanks Uniswap v2 for the trick!
             // 2. Now we want a "pessimistic" lower bound on the ending ETH pool qty.  We can get this by supposing the entire
             // burn happened at our initial fumSellPrice0: this is "optimistic" in terms of how much ETH we'd get back, but
             // "pessimistic" in the sense we want - how much ETH would be left in the pool:
-            uint lowerBoundEthQty1 = ls.ethPool - fumIn.wadMulUp(fumSellPrice0);
-            uint lowerBoundEthShrinkFactor1 = lowerBoundEthQty1.wadDivDown(ls.ethPool);
+            uint256 lowerBoundEthQty1 = ls.ethPool - fumIn.wadMulUp(fumSellPrice0);
+            uint256 lowerBoundEthShrinkFactor1 = lowerBoundEthQty1.wadDivDown(ls.ethPool);
 
             // 3. From this "pessimistic" lower bound on the ending ETH qty, and a similarly pessimistic netFumDelta value of 4
             // (the netFumDelta when debt ratio is at the highest value it can end at here, MAX_DEBT_RATIO), we can calculate a
             // "pessimistic" lower bound on our ending adjustedEthUsdPrice, ie, overstating how large an impact our burn could
             // have on the ETH/USD price used to calculate our FUM sell price:
-            uint adjustedEthUsdPrice1 = adjustedEthUsdPrice0.wadMulDown(lowerBoundEthShrinkFactor1.wadPowDown(FOUR_WAD));
+            uint256 adjustedEthUsdPrice1 =
+                adjustedEthUsdPrice0.wadMulDown(lowerBoundEthShrinkFactor1.wadPowDown(FOUR_WAD));
 
             // 4. From adjustedEthUsdPrice1, we can calculate a pessimistic (upper-bound) debtRatio2 we'll end up at after the
             // defund operation, and from debtRatio2, a pessimistic (upper-bound) netFumDelta2 we can hold fixed during the
             // calculation:
-            uint debtRatio1 = debtRatio(adjustedEthUsdPrice1, lowerBoundEthQty1, ls.usmTotalSupply);
-            uint debtRatio2 = debtRatio1.wadMin(MAX_DEBT_RATIO);    // defund() fails anyway if dr ends > MAX, so cap it at MAX
-            uint netFumDelta2;
-            unchecked { netFumDelta2 = WAD.wadDivUp(WAD - debtRatio2) - WAD; }
+            uint256 debtRatio1 = debtRatio(adjustedEthUsdPrice1, lowerBoundEthQty1, ls.usmTotalSupply);
+            uint256 debtRatio2 = debtRatio1.wadMin(MAX_DEBT_RATIO); // defund() fails anyway if dr ends > MAX, so cap it at MAX
+            uint256 netFumDelta2;
+            unchecked {
+                netFumDelta2 = WAD.wadDivUp(WAD - debtRatio2) - WAD;
+            }
 
             // 5. Combining lowerBoundEthShrinkFactor1 and netFumDelta2 gives us our final, pessimistic adjShrinkFactor, from
             // our standard formula adjChangeFactor = ethChangeFactor**(netFumDelta / 2):
-            unchecked { adjShrinkFactor = lowerBoundEthShrinkFactor1.wadPowDown(netFumDelta2 / 2); }
+            unchecked {
+                adjShrinkFactor = lowerBoundEthShrinkFactor1.wadPowDown(netFumDelta2 / 2);
+            }
         }
 
         // 6. And adjShrinkFactor tells us the adjustedEthUsdPrice2 we'll end the operation at, from which we can also
         // calculate the instantaneous FUM sell price we'll end the operation at, just as we calculated our ending fumBuyPrice1
         // in fumFromFund():
-        uint adjustedEthUsdPrice2 = adjustedEthUsdPrice0.wadMulDown(adjShrinkFactor.wadSquaredDown());
-        uint fumSellPrice2 = fumPrice(IUSM.Side.Sell, adjustedEthUsdPrice2, ls.ethPool, ls.usmTotalSupply, fumSupply, false);
+        uint256 adjustedEthUsdPrice2 = adjustedEthUsdPrice0.wadMulDown(adjShrinkFactor.wadSquaredDown());
+        uint256 fumSellPrice2 =
+            fumPrice(IUSM.Side.Sell, adjustedEthUsdPrice2, ls.ethPool, ls.usmTotalSupply, fumSupply, false);
 
         // 7. We now know the starting fumSellPrice0, and the ending fumSellPrice2.  We want to combine these to get a single
         // avgFumSellPrice we can use for the entire defund operation, which will trivially give us ethOut.  But taking the
@@ -756,8 +869,10 @@ contract USM is IUSM, ERC20Permit, OptOutable {
         // highly perverse result that a *larger* fumIn returns strictly *less* ETH!  What alternative to geometric average
         // gives the best results here is a complicated problem, but one simple option that avoids the avgFumSellPrice = 0 flaw
         // is to just take the arithmetic average instead, (fumSellPrice0 + fumSellPrice2) / 2:
-        uint avgFumSellPrice = fumSellPrice0 + fumSellPrice2;
-        unchecked { avgFumSellPrice /= 2; }
+        uint256 avgFumSellPrice = fumSellPrice0 + fumSellPrice2;
+        unchecked {
+            avgFumSellPrice /= 2;
+        }
         ethOut = fumIn.wadMulDown(avgFumSellPrice);
     }
 }

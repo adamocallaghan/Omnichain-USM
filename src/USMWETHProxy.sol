@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity ^0.8.0;
 
-import "acc-erc20/contracts/IERC20.sol";
+import "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./external/IWETH9.sol";
 import "./IUSM.sol";
 
@@ -14,8 +14,7 @@ contract USMWETHProxy {
     IERC20 public immutable fum;
     IWETH9 public immutable weth;
 
-    constructor(IUSM usm_, IWETH9 weth_)
-    {
+    constructor(IUSM usm_, IWETH9 weth_) {
         usm = usm_;
         fum = usm_.fum();
         weth = weth_;
@@ -35,12 +34,10 @@ contract USMWETHProxy {
      * @param ethIn WETH to deduct.
      * @param minUsmOut Minimum accepted USM for a successful mint.
      */
-    function mint(address to, uint ethIn, uint minUsmOut)
-        external returns (uint usmOut)
-    {
+    function mint(address to, uint256 ethIn, uint256 minUsmOut) external returns (uint256 usmOut) {
         require(weth.transferFrom(msg.sender, address(this), ethIn), "WETH transfer fail");
         weth.withdraw(ethIn);
-        usmOut = usm.mint{ value: ethIn }(to, minUsmOut);
+        usmOut = usm.mint{value: ethIn}(to, minUsmOut);
     }
 
     /**
@@ -49,12 +46,10 @@ contract USMWETHProxy {
      * @param usmToBurn Amount of USM to burn.
      * @param minEthOut Minimum accepted WETH for a successful burn.
      */
-    function burn(address to, uint usmToBurn, uint minEthOut)
-        external returns (uint ethOut)
-    {
+    function burn(address to, uint256 usmToBurn, uint256 minEthOut) external returns (uint256 ethOut) {
         usm.transferFrom(msg.sender, address(this), usmToBurn);
         ethOut = usm.burn(payable(this), usmToBurn, minEthOut);
-        weth.deposit{ value: ethOut }();
+        weth.deposit{value: ethOut}();
         require(weth.transfer(to, ethOut), "WETH transfer fail");
     }
 
@@ -64,12 +59,10 @@ contract USMWETHProxy {
      * @param ethIn WETH to deduct.
      * @param minFumOut Minimum accepted FUM for a successful mint.
      */
-    function fund(address to, uint ethIn, uint minFumOut)
-        external returns (uint fumOut)
-    {
+    function fund(address to, uint256 ethIn, uint256 minFumOut) external returns (uint256 fumOut) {
         require(weth.transferFrom(msg.sender, address(this), ethIn), "WETH transfer fail");
         weth.withdraw(ethIn);
-        fumOut = usm.fund{ value: ethIn }(to, minFumOut);
+        fumOut = usm.fund{value: ethIn}(to, minFumOut);
     }
 
     /**
@@ -79,12 +72,10 @@ contract USMWETHProxy {
      * @param fumToBurn Amount of FUM to burn.
      * @param minEthOut Minimum accepted ETH for a successful defund.
      */
-    function defund(address to, uint fumToBurn, uint minEthOut)
-        external returns (uint ethOut)
-    {
+    function defund(address to, uint256 fumToBurn, uint256 minEthOut) external returns (uint256 ethOut) {
         fum.transferFrom(msg.sender, address(this), fumToBurn);
         ethOut = usm.defund(payable(this), fumToBurn, minEthOut);
-        weth.deposit{ value: ethOut }();
+        weth.deposit{value: ethOut}();
         require(weth.transfer(to, ethOut), "WETH transfer fail");
     }
 }
