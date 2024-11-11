@@ -70,7 +70,7 @@ contract USM is IUSM, ERC20, OptOutable {
         OptOutable(addressesYouCantSendThisContractsTokensTo, contractsToAskToRejectSendsToThisContractsAddress)
     {
         oracle = oracle_;
-        fum = new FUM(addressesYouCantSendThisContractsTokensTo, contractsToAskToRejectSendsToThisContractsAddress);
+        fum = new FUM();
     }
 
     // ____________________ Modifiers ____________________
@@ -162,25 +162,25 @@ contract USM is IUSM, ERC20, OptOutable {
 
     // ____________________ Internal ERC20 transactional functions ____________________
 
-    /**
-     * @notice If a user sends USM tokens directly to this contract (or to the FUM contract), assume they intend it as a
-     * `burn`.  If using `transfer`/`transferFrom` as `burn`, and if decimals 8 to 11 (inclusive) of the amount transferred
-     * are `0000`, then the next 7 will be parsed as the maximum number of USM tokens sent per ETH received, with the 7-digit
-     * number interpreted as "hundredths of a USM".  See comments in `MinOut`.
-     */
-    function _transfer(address sender, address recipient, uint256 amount)
-        internal
-        override
-        noOptOut(recipient)
-        returns (bool)
-    {
-        if (recipient == address(this) || recipient == address(fum) || recipient == address(0)) {
-            _burnUsm(sender, payable(sender), amount, MinOut.parseMinEthOut(amount));
-        } else {
-            super._transfer(sender, recipient, amount);
-        }
-        return true;
-    }
+    // /**
+    //  * @notice If a user sends USM tokens directly to this contract (or to the FUM contract), assume they intend it as a
+    //  * `burn`.  If using `transfer`/`transferFrom` as `burn`, and if decimals 8 to 11 (inclusive) of the amount transferred
+    //  * are `0000`, then the next 7 will be parsed as the maximum number of USM tokens sent per ETH received, with the 7-digit
+    //  * number interpreted as "hundredths of a USM".  See comments in `MinOut`.
+    //  */
+    // function _transfer(address sender, address recipient, uint256 amount)
+    //     internal
+    //     override
+    //     noOptOut(recipient)
+    //     returns (bool)
+    // {
+    //     if (recipient == address(this) || recipient == address(fum) || recipient == address(0)) {
+    //         _burnUsm(sender, payable(sender), amount, MinOut.parseMinEthOut(amount));
+    //     } else {
+    //         super._transfer(sender, recipient, amount);
+    //     }
+    //     return true;
+    // }
 
     // ____________________ Internal helper transactional functions (for functions above) ____________________
 
